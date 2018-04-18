@@ -1,9 +1,9 @@
-# Calico Version v3.1.0
-# https://docs.projectcalico.org/v3.1/releases#v3.1.0
+# Calico Version master
+# https://docs.projectcalico.org/master/releases#master
 # This manifest includes the following component versions:
-#   calico/node:v3.1.0
-#   calico/cni:v3.1.0
-#   calico/kube-controllers:v3.1.0
+#   calico/node:master
+#   calico/cni:master
+#   calico/kube-controllers:master
 
 # This ConfigMap is used to configure a self-hosted Calico installation.
 kind: ConfigMap
@@ -18,6 +18,9 @@ data:
   # Configure the Calico backend to use.
   calico_backend: "bird"
 
+  # Configure the MTU to use
+  veth_mtu: "1440"
+
   # The CNI network configuration to install on each node.
   cni_network_config: |-
     {
@@ -31,7 +34,7 @@ data:
           "etcd_cert_file": "__ETCD_CERT_FILE__",
           "etcd_ca_cert_file": "__ETCD_CA_CERT_FILE__",
           "log_level": "info",
-          "mtu": 1500,
+          "mtu": __CNI_MTU__,
           "ipam": {
               "type": "calico-ipam"
           },
@@ -116,7 +119,6 @@ spec:
       # Minimize downtime during a rolling upgrade or deletion; tell Kubernetes to do a "force
       # deletion": https://kubernetes.io/docs/concepts/workloads/pods/pod/#termination-of-pods.
       terminationGracePeriodSeconds: 0
-
       # ALP: Add initContainers.
       initContainers:
       - name: flexvol-driver
@@ -131,7 +133,7 @@ spec:
         # container programs network policy and routes on each
         # host.
         - name: calico-node
-          image: quay.io/calico/node:v3.1.0
+          image: quay.io/calico/node:master
           env:
             # The location of the Calico etcd cluster.
             - name: ETCD_ENDPOINTS
@@ -174,7 +176,10 @@ spec:
               value: "info"
             # Set MTU for tunnel device used if ipip is enabled
             - name: FELIX_IPINIPMTU
-              value: "1440"
+              valueFrom:
+                configMapKeyRef:
+                  name: calico-config
+                  key: veth_mtu
             # Location of the CA certificate for etcd.
             - name: ETCD_CA_CERT_FILE
               valueFrom:
@@ -213,13 +218,16 @@ spec:
             httpGet:
               path: /liveness
               port: 9099
+              host: localhost
             periodSeconds: 10
             initialDelaySeconds: 10
             failureThreshold: 6
           readinessProbe:
-            httpGet:
-              path: /readiness
-              port: 9099
+            exec:
+              command:
+              - /bin/readiness
+              - -bird
+              - -felix
             periodSeconds: 10
           volumeMounts:
             - mountPath: /lib/modules
@@ -239,7 +247,7 @@ spec:
         # This container installs the Calico CNI binaries
         # and CNI network config file on each node.
         - name: install-cni
-          image: quay.io/calico/cni:v3.1.0
+          image: quay.io/calico/cni:master
           command: ["/install-cni.sh"]
           env:
             # Name of the CNI config file to create.
@@ -257,6 +265,12 @@ spec:
                 configMapKeyRef:
                   name: calico-config
                   key: cni_network_config
+            # CNI MTU Config variable
+            - name: CNI_MTU
+              valueFrom:
+                configMapKeyRef:
+                  name: calico-config
+                  key: veth_mtu
           volumeMounts:
             - mountPath: /host/opt/cni/bin
               name: cni-bin-dir
@@ -288,7 +302,6 @@ spec:
           secret:
             secretName: calico-etcd-secrets
             defaultMode: 0400
-
         # ALP: Specify volumes.
         - name: test-workload
           hostPath:
@@ -336,7 +349,7 @@ spec:
       serviceAccountName: calico-kube-controllers
       containers:
         - name: calico-kube-controllers
-          image: quay.io/calico/kube-controllers:v3.1.0
+          image: quay.io/calico/kube-controllers:master
           env:
             # The location of the Calico etcd cluster.
             - name: ETCD_ENDPOINTS
